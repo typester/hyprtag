@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
-use tokio::{net::{UnixStream, UnixListener}, io::{BufStream, AsyncBufReadExt}, sync::mpsc, process::Command};
+use hyprctl::hyprctl;
+use tokio::{net::{UnixStream, UnixListener}, io::{BufStream, AsyncBufReadExt}, sync::mpsc};
 use tracing_subscriber::EnvFilter;
 
 use state::{State, Changes};
 
 pub mod state;
+pub mod hyprctl;
 
 #[derive(Debug)]
 enum Ctrl {
@@ -176,7 +178,7 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
     }
 }
 
-fn hyprland_dir() -> anyhow::Result<PathBuf> {
+pub(crate) fn hyprland_dir() -> anyhow::Result<PathBuf> {
     let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE")?;
     Ok(Path::new("/tmp/hypr").join(sig))
 }
@@ -286,34 +288,6 @@ fn handle_changes(changes: Changes) {
     }
 
     hyprctl(args);
-}
-
-fn hyprctl(args: Vec<String>) {
-    if args.len() == 0 {
-        tracing::debug!("no args");
-        return;
-    }
-
-    tokio::spawn(async move {
-        let args = vec![
-            "--batch".into(),
-            args.join(";"),
-        ];
-        tracing::debug!("hyprctl: {}", args.join(" "));
-        let out = match Command::new("hyprctl")
-            .args(args)
-            .output()
-            .await
-        {
-            Ok(out) => out,
-            Err(err) => {
-                tracing::error!(%err, "failed to exec hyprtl");
-                return;
-            },
-        };
-
-        tracing::debug!("hyprctl result: {:?}", out);
-    });
 }
 
 #[cfg(test)]

@@ -4,49 +4,15 @@ use anyhow::bail;
 use tokio::{net::{UnixStream, UnixListener}, io::{BufStream, AsyncBufReadExt}, sync::mpsc, process::Command};
 use tracing_subscriber::EnvFilter;
 
-#[derive(Debug)]
-struct State {
-    active_tags: u32,
-    active_tag: u8,
-    active_tag_index: usize,
-    active_window: String,
-    tags: Vec<Tag>,
-}
+use state::{State, Changes};
 
-impl State {
-    fn new() -> Self {
-        let tags = (0..32).map(|n| Tag::new(n + 1)).collect();
-        State {
-            active_tags: 1,
-            active_tag: 1,
-            active_tag_index: 0,
-            active_window: "".into(),
-            tags,
-        }
-    }
-
-}
-
-#[derive(Debug)]
-struct Tag {
-    id: u8,
-    windows: Vec<String>,
-}
-
-impl Tag {
-    fn new(id: u8) -> Self {
-        Self {
-            id,
-            windows: vec![],
-        }
-    }
-}
+pub mod state;
 
 #[derive(Debug)]
 enum Ctrl {
-    ShowTag(u32),
-    ToggleTag(u32),
-    MoveToTag(u32, Option<String>),
+    ShowTag(u8),
+    ToggleTag(u8),
+    MoveToTag(u8, Option<String>),
 }
 
 #[tokio::main]
@@ -162,7 +128,7 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                             continue;
                         }
 
-                        let tag = match args[0].parse::<u32>() {
+                        let tag = match args[0].parse::<u8>() {
                             Ok(tag) => tag,
                             Err(_) => {
                                 tracing::error!("invalid tag: {}", args[0]);
@@ -179,7 +145,7 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                             continue;
                         }
 
-                        let tag = match args[0].parse::<u32>() {
+                        let tag = match args[0].parse::<u8>() {
                             Ok(tag) => tag,
                             Err(_) => {
                                 tracing::error!("invalid tag: {}", args[0]);
@@ -194,7 +160,7 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                             continue;
                         }
 
-                        let tag = match args[0].parse::<u32>() {
+                        let tag = match args[0].parse::<u8>() {
                             Ok(tag) => tag,
                             Err(_) => {
                                 tracing::error!("invalid tag: {}", args[0]);
@@ -242,44 +208,21 @@ fn handle_event_stream(state: &mut State, buf: &str) {
             }
             match cmd {
                 "openwindow" => {
+                    if let Err(err) = state.new_window_added(id.into()) {
+                        tracing::error!(%err, "openwindow error");
+                    }
                 },
 
                 "closewindow" => {
                     tracing::info!("closewindow: {}", id);
-                    let query = state.tags.iter_mut().enumerate().find_map(|(tag_index, tag)| {
-                        tag.windows.iter().enumerate().find_map(|(window_index, w)| {
-                            if w == &id {
-                                Some((tag_index, window_index))
-                            } else {
-                                None
-                            }
-                        })
-                    });
-
-                    if let Some((tag_index, window_index)) = query {
-                        if let Some(tag) = state.tags.get_mut(tag_index) {
-                            tag.windows.remove(window_index);
-                        }
+                    if let Err(err) = state.window_removed(id.into()) {
+                        tracing::error!(%err, "closewindow error");
                     }
                 },
 
                 "activewindowv2" => {
-                    let active_tag = state.tags.iter().find(|tag| {
-                        tag.windows.iter().find(|w| w == &id).is_some()
-                    });
-
-                    if let Some(active_tag) = active_tag {
-                        tracing::info!("active window: {}", id);
-                        state.active_tag = active_tag.id;
-                        state.active_tag_index = (active_tag.id - 1) as usize;
-                        state.active_window = id.into();
-                    } else {
-                        tracing::info!("open window: {}", id);
-                        // open window
-                        if let Some(tag) = state.tags.get_mut(state.active_tag_index) {
-                            tag.windows.push(id.into());
-                        }
-                        state.active_window = id.into();
+                    if let Err(err) = state.focus_window_changed(id.into()) {
+                        tracing::error!(%err, "activewindowv2 error");
                     }
                 },
 
@@ -295,153 +238,62 @@ fn handle_ctrl(state: &mut State, msg: Ctrl) {
     tracing::debug!(?msg, "handle_ctrl");
     match msg {
         Ctrl::MoveToTag(tag, window) => {
-            let target_index = (tag - 1) as usize;
-            let window = match window {
-                Some(w) => w,
-                None => state.active_window.clone(),
+            let changes = match state.move_window(tag, window) {
+                Ok(changes) => changes,
+                Err(err) => {
+                    tracing::error!(%err, "Ctrl::MoveToTag error");
+                    return;
+                },
             };
-            if window == "" {
-                return;
-            }
 
-            tracing::debug!("window: {}", window);
-
-            let query = state.tags.iter_mut().enumerate().find_map(|(tag_index, tag)| {
-                tag.windows.iter().enumerate().find_map(|(window_index, w)| {
-                    if w == &window {
-                        Some((tag_index, window_index))
-                    } else {
-                        None
-                    }
-                })
-            });
-
-            if let Some((tag_index, window_index)) = query {
-                if tag_index == target_index {
-                    tracing::debug!(%window, "the window is already on tag:{}", tag_index + 1);
-                } else {
-                    let current_tag = state.tags.get_mut(tag_index).expect("out of index");
-                    current_tag.windows.remove(window_index);
-
-                    let target_tag = match state.tags.get_mut(target_index) {
-                        None => {
-                            tracing::error!("tag is out of range");
-                            return;
-                        },
-                        Some(t) => t,
-                    };
-                    target_tag.windows.push(window.clone());
-
-                    if state.active_tag == target_tag.id {
-                        // show
-                        hyprctl(vec![
-                            format!("dispatch movetoworkspacesilent {},address:0x{}", 1, window),
-                        ]);
-                    } else {
-                        // hide
-                        hyprctl(vec![
-                            format!("dispatch movetoworkspacesilent {},address:0x{}", 100+target_index, window),
-                        ]);
-                    }
-                }
-            }
+            handle_changes(changes);
         },
 
         Ctrl::ShowTag(tag) => {
-            let target_index = tag - 1;
-            for n in 0..32 {
-                if state.active_tags & 1<<n != 0 {
-                    if n != target_index {
-                        // hide
-                        let t = state.tags.get_mut(n as usize).unwrap();
-                        let arg = t.windows.iter().map(|w| {
-                            format!("dispatch movetoworkspacesilent {},address:0x{}", 100+n, w)
-                        }).collect();
-                        hyprctl(arg);
-                    }
-                } else {
-                    if n == target_index {
-                        // show
-                        let t = state.tags.get_mut(n as usize).unwrap();
-                        let mut arg: Vec<String> = t.windows.iter().map(|w| {
-                            format!("dispatch movetoworkspacesilent 1,address:0x{}", w)
-                        }).collect();
-
-                        // keep focus or focus first window
-                        let focus = t.windows.iter().find(|w| **w == state.active_window)
-                            .or(t.windows.iter().next());
-                        if let Some(focus) = focus {
-                            arg.push(format!("dispatch focuswindow address:0x{}", focus));
-                        }
-                        hyprctl(arg);
-                    }
-                }
-            }
-            state.active_tag = tag as u8;
-            state.active_tags = 1<<target_index;
-            state.active_tag_index = (tag - 1) as usize;
+            let changes = match state.set_visible_tags(1<<(tag-1)) {
+                Ok(changes) => changes,
+                Err(err) => {
+                    tracing::error!(%err, "Ctrl::ShowTag error");
+                    return;
+                },
+            };
+            handle_changes(changes);
         },
 
         Ctrl::ToggleTag(tag) => {
-            let target_index = (tag - 1) as usize;
-            if state.active_tags & (1<<target_index) == 0 {
-                // show
-                let t = match state.tags.get_mut(target_index) {
-                    None => {
-                        return
-                    },
-                    Some(t) => t,
-                };
-                let arg = t.windows.iter().map(|w| {
-                    format!("dispatch movetoworkspacesilent 1,address:0x{}", w)
-                }).collect();
-                hyprctl(arg);
-
-                state.active_tags = state.active_tags | (1 << target_index);
-            } else {
-                tracing::debug!(%state.active_tags, %target_index, "toggle off"); 
-                let active_tags = state.active_tags & !(1<<target_index);
-                if active_tags == 0 {
-                    tracing::error!("cannot toggle last active tag");
+            let changes = match state.toggle_tag(tag) {
+                Ok(changes) => changes,
+                Err(err) => {
+                    tracing::error!(%err, "Ctrl::ToggleTag error");
                     return;
-                }
-
-                // hide
-                let t = match state.tags.get_mut(target_index) {
-                    None => {
-                        return
-                    },
-                    Some(t) => t,
-                };
-                let arg = t.windows.iter().map(|w| {
-                    format!("dispatch movetoworkspacesilent {},address:0x{}", 100+target_index, w)
-                }).collect();
-                hyprctl(arg);
-
-                state.active_tags = active_tags;
-            }
-
-            let mut windows: Vec<String> = vec![];
-            for n in 0..32 {
-                if state.active_tags & 1<<n != 0 {
-                    if let Some(tags) = state.tags.get(n) {
-                        windows.extend(tags.windows.clone());
-                    }
-                }
-            }
-            let focus = windows.iter().find(|w| **w == state.active_window)
-                .or(windows.iter().next());
-            if let Some(focus) = focus {
-                hyprctl(vec![format!("dispatch focuswindow address:0x{}", focus)])
-            }
+                },
+            };
+            handle_changes(changes);
         },
     }
+}
+
+fn handle_changes(changes: Changes) {
+    let mut args: Vec<String> = vec![];
+    args.extend(
+        changes.window_removed.iter().map(|w| format!("dispatch movetoworkspacesilent {},address:0x{}", w.tag + 100, w.addr)).collect::<Vec<String>>()
+    );
+    args.extend(
+        changes.window_added.iter().map(|w| format!("dispatch movetoworkspacesilent {},address:0x{}", 1, w.addr)).collect::<Vec<String>>()
+    );
+    if let Some(focus) = changes.focus {
+        args.push(format!("dispatch focuswindow address:0x{}", focus));
+    }
+
+    hyprctl(args);
 }
 
 fn hyprctl(args: Vec<String>) {
     if args.len() == 0 {
         tracing::debug!("no args");
+        return;
     }
+
     tokio::spawn(async move {
         let args = vec![
             "--batch".into(),

@@ -103,8 +103,6 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                     break;
                 }
 
-                tracing::debug!("recv: {}", buf);
-
                 let mut p = &buf[..];
                 if p.ends_with("\r\n") {
                     p = &buf[..buf.len()-2];
@@ -112,7 +110,7 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                     p = &buf[..buf.len()-1];
                 }
 
-                tracing::debug!("p: {}", p);
+                tracing::debug!("ctrl recv: {}", p);
 
                 let chunks: Vec<&str> = p.split(" ").collect();
 

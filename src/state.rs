@@ -323,6 +323,7 @@ mod tests {
         assert_eq!(state.visible_windows().len(), 1);
         state.set_visible_tags(0b10).unwrap();
         assert_eq!(state.visible_windows().len(), 0);
+        assert_eq!(state.active_tag_index, 1);
 
         state.new_window_added("firefox".into()).unwrap();
         assert_eq!(state.visible_windows().len(), 1);

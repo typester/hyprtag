@@ -81,16 +81,16 @@ impl State {
         } else {
             None
         };
+
         let focus = if active_tag_index.is_some() && tags & 1<<active_tag_index.unwrap() != 0 {
+            self.active_tag_index = active_tag_index.unwrap();
             self.active_window.clone()
         } else {
+            self.active_tag_index = first_tag_index.unwrap();
+            self.active_window = None;
             first_window
         };
 
-        self.active_tag_index =  match active_tag_index {
-            Some(active_tag_index) => active_tag_index,
-            None => first_tag_index.unwrap(),
-        };
 
         Ok(Changes {
             window_added,
@@ -116,13 +116,7 @@ impl State {
             bail!("the window:{} is already in our state", window);
         }
 
-        let active_tag_index = if let Some(active_window) = &self.active_window {
-            self.find_window_tag_index(&active_window).unwrap_or(self.active_tag_index)
-        } else {
-            self.active_tag_index
-        };
-
-        if let Some(tag) = self.tags.get_mut(active_tag_index) {
+        if let Some(tag) = self.tags.get_mut(self.active_tag_index) {
             tag.window_addrs.push(window);
         }
 
@@ -330,5 +324,20 @@ mod tests {
 
         state.set_visible_tags(0b1).unwrap();
         assert_eq!(state.visible_windows().len(), 1);
+    }
+
+    #[test]
+    fn active_tag_index() {
+        let mut state = State::new();
+
+        state.focus_window_changed("terminal".into()).unwrap();
+        assert_eq!(state.visible_windows().len(), 1);
+        assert!(state.active_window.is_some());
+        assert_eq!(state.active_tag_index, 0);
+
+        state.set_visible_tags(1<<1).unwrap();
+        assert_eq!(state.visible_windows().len(), 0);
+        assert_eq!(state.active_tag_index, 1);
+        assert!(state.active_window.is_none());
     }
 }

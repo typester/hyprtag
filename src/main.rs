@@ -230,8 +230,6 @@ fn handle_event_stream(state: &mut State, buf: &str) {
             }
         },
     }
-
-    tracing::debug!("state: {:?}", state);
 }
 
 fn handle_ctrl(state: &mut State, msg: Ctrl) {

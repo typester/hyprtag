@@ -6,6 +6,7 @@ use anyhow::bail;
 pub struct State {
     tags: Vec<Tag>,
     visible_tags: u32,
+    active_tag_index: usize,
     active_window: Option<String>,
 }
 
@@ -39,6 +40,7 @@ impl State {
         State {
             tags: (1..=32).map(|n| Tag::new(n)).collect(),
             visible_tags: 1,
+            active_tag_index: 0,
             active_window: None,
         }
     }
@@ -55,11 +57,15 @@ impl State {
         let w1 = self.visible_windows();
 
         let mut first_window = None;
+        let mut first_tag_index = None;
         for n in 0..32 {
             if tags & 1<<n != 0 {
                 self.visible_tags |= 1<<n;
                 if first_window.is_none() && self.tags[n].window_addrs.len() > 0 {
                     first_window = Some(self.tags[n].window_addrs[0].clone());
+                }
+                if first_tag_index.is_none() {
+                    first_tag_index = Some(n);
                 }
             } else {
                 self.visible_tags &= !(1<<n);
@@ -79,6 +85,11 @@ impl State {
             self.active_window.clone()
         } else {
             first_window
+        };
+
+        self.active_tag_index =  match active_tag_index {
+            Some(active_tag_index) => active_tag_index,
+            None => first_tag_index.unwrap(),
         };
 
         Ok(Changes {
@@ -106,18 +117,12 @@ impl State {
         }
 
         let active_tag_index = if let Some(active_window) = &self.active_window {
-            self.find_window_tag_index(&active_window)
+            self.find_window_tag_index(&active_window).unwrap_or(self.active_tag_index)
         } else {
-            None
+            self.active_tag_index
         };
 
-        // active tag or first visible tag
-        let tag_index = match active_tag_index.or_else(|| (0..32).find(|n| self.visible_tags & 1<<n != 0)) {
-            Some(index) => index as usize,
-            None => panic!("should not reach here")
-        };
-
-        if let Some(tag) = self.tags.get_mut(tag_index) {
+        if let Some(tag) = self.tags.get_mut(active_tag_index) {
             tag.window_addrs.push(window);
         }
 
@@ -309,4 +314,20 @@ mod tests {
         assert_eq!(state.visible_tags(), 0b101);
     }
 
+    #[test]
+    fn new_window_on_empty_tag() {
+        let mut state = State::new();
+
+        state.new_window_added("terminal".into()).unwrap();
+
+        assert_eq!(state.visible_windows().len(), 1);
+        state.set_visible_tags(0b10).unwrap();
+        assert_eq!(state.visible_windows().len(), 0);
+
+        state.new_window_added("firefox".into()).unwrap();
+        assert_eq!(state.visible_windows().len(), 1);
+
+        state.set_visible_tags(0b1).unwrap();
+        assert_eq!(state.visible_windows().len(), 1);
+    }
 }

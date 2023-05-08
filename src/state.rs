@@ -6,6 +6,7 @@ use anyhow::bail;
 pub struct State {
     tags: Vec<Tag>,
     visible_tags: u32,
+    prev_tags: u32,
     active_tag_index: usize,
     active_window: Option<String>,
 }
@@ -40,6 +41,7 @@ impl State {
         State {
             tags: (1..=32).map(|n| Tag::new(n)).collect(),
             visible_tags: 1,
+            prev_tags: 1,
             active_tag_index: 0,
             active_window: None,
         }
@@ -55,6 +57,8 @@ impl State {
         }
 
         let w1 = self.visible_windows();
+
+        self.prev_tags = self.visible_tags;
 
         let mut first_window = None;
         let mut first_tag_index = None;
@@ -91,12 +95,15 @@ impl State {
             first_window
         };
 
-
         Ok(Changes {
             window_added,
             window_removed,
             focus,
         })
+    }
+
+    pub fn restore_prev_tags(&mut self) -> anyhow::Result<Changes> {
+        self.set_visible_tags(self.prev_tags)
     }
 
     pub fn toggle_tag(&mut self, tag: u8) -> anyhow::Result<Changes> {

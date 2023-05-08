@@ -15,6 +15,7 @@ enum Ctrl {
     ShowTag(u8),
     ToggleTag(u8),
     MoveToTag(u8, Option<String>),
+    RestorePrevTags(),
 }
 
 #[tokio::main]
@@ -169,6 +170,9 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                         };
                         tx.send(Ctrl::ToggleTag(tag)).await.expect("send error");
                     },
+                    "restore" => {
+                        tx.send(Ctrl::RestorePrevTags()).await.expect("send error");
+                    },
                     _ => {},
                 }
             },
@@ -263,6 +267,17 @@ fn handle_ctrl(state: &mut State, msg: Ctrl) {
                 Ok(changes) => changes,
                 Err(err) => {
                     tracing::error!(%err, "Ctrl::ToggleTag error");
+                    return;
+                },
+            };
+            handle_changes(changes);
+        },
+
+        Ctrl::RestorePrevTags() => {
+            let changes = match state.restore_prev_tags() {
+                Ok(changes) => changes,
+                Err(err) => {
+                    tracing::error!(%err, "Ctrl::RestorePrevTags error");
                     return;
                 },
             };

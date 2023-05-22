@@ -250,12 +250,13 @@ fn handle_event_stream(state: &mut MonitorsState, buf: &str) {
                     }
                 },
 
-                "movewindow" => {
-                    let dest_monitor = extra.parse::<u8>().expect("invalid event");
-                    if let Err(err) = state.window_moved(id.into(), dest_monitor) {
-                        tracing::error!(%err, "movewindow error")
-                    }
-                },
+                //// disable manual window move. this breaks tag toggle feature
+                //"movewindow" => {
+                //    let dest_monitor = extra.parse::<u8>().expect("invalid event");
+                //    if let Err(err) = state.window_moved(id.into(), dest_monitor) {
+                //        tracing::error!(%err, "movewindow error")
+                //    }
+                //},
 
                 _ => (),
             }

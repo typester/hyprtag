@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
-use hyprctl::hyprctl;
+use hyprctl::{hyprctl_batch, hyprctl_monitors};
 use tokio::{net::{UnixStream, UnixListener}, io::{BufStream, AsyncBufReadExt}, sync::mpsc};
 use tracing_subscriber::EnvFilter;
 
-use state::{State, Changes};
+use monitor::{MonitorsState, Changes};
 
+pub mod monitor;
 pub mod state;
 pub mod hyprctl;
 
@@ -22,7 +23,10 @@ enum Ctrl {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).compact().init();
 
-    let mut state = State::new();
+    let monitors = hyprctl_monitors().await?;
+    tracing::error!(?monitors, "monitors");
+
+    let mut monitors = MonitorsState::from(monitors);
 
     let hypr_dir = hyprland_dir()?;
     let hypr_event_sock = hypr_dir.join(".socket2.sock").to_string_lossy().to_string();
@@ -49,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
                         if r == 0 {
                             break;
                         }
-                        handle_event_stream(&mut state, &buf);
+                        handle_event_stream(&mut monitors, &buf);
                     },
                 }
             }
@@ -62,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
                     },
 
                     Some(msg) => {
-                        handle_ctrl(&mut state, msg);
+                        handle_ctrl(&mut monitors, msg);
                     },
                 }
             }
@@ -137,7 +141,6 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                             },
                         };
 
-                        tracing::debug!("handle move?");
                         tx.send(Ctrl::MoveToTag(tag, None)).await.expect("send error");
                     },
                     "show" => {
@@ -185,32 +188,43 @@ pub(crate) fn hyprland_dir() -> anyhow::Result<PathBuf> {
     Ok(Path::new("/tmp/hypr").join(sig))
 }
 
-fn parse_line<'a>(line: &'a str) -> anyhow::Result<(&'a str, &'a str)> {
+fn parse_line<'a>(line: &'a str) -> anyhow::Result<(&'a str, &'a str, &'a str)> {
     let line = &line[..line.len() - 1]; // remove \n
     let chunks: Vec<&str> = line.split(">>").collect();
 
     if chunks.len() >= 2 {
         let args: Vec<&str> = chunks[1].split(",").collect();
-        Ok((chunks[0], args[0]))
+        if args.len() >= 2 {
+            Ok((chunks[0], args[0], args[1]))
+        } else {
+            Ok((chunks[0], args[0], &""))
+        }
     } else if chunks.len() == 1 {
-        Ok((chunks[0], &""))
+        Ok((chunks[0], &"", &""))
     } else {
         bail!("invalid line: {}", line)
     }
 }
 
-fn handle_event_stream(state: &mut State, buf: &str) {
+fn handle_event_stream(state: &mut MonitorsState, buf: &str) {
     tracing::debug!("[event] {:?}", buf);
 
     match parse_line(&buf) {
         Err(err) => {
             tracing::error!(%err, "invalid message received");
         },
-        Ok((cmd, id)) => {
+        Ok((cmd, id, extra)) => {
             if id == "" {
                 return;
             }
             match cmd {
+                "focusedmon" => {
+                    tracing::debug!("focusedmon");
+                    if let Err(err) = state.focused_monitor_changed(id) {
+                        tracing::error!(%err, "focusedmon error")
+                    }
+                },
+
                 "openwindow" => {
                     if let Err(err) = state.new_window_added(id.into()) {
                         tracing::error!(%err, "openwindow error");
@@ -230,13 +244,20 @@ fn handle_event_stream(state: &mut State, buf: &str) {
                     }
                 },
 
+                "movewindow" => {
+                    let dest_monitor = extra.parse::<u8>().expect("invalid event");
+                    if let Err(err) = state.window_moved(id.into(), dest_monitor) {
+                        tracing::error!(%err, "movewindow error")
+                    }
+                },
+
                 _ => (),
             }
         },
     }
 }
 
-fn handle_ctrl(state: &mut State, msg: Ctrl) {
+fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
     tracing::debug!(?msg, "handle_ctrl");
     match msg {
         Ctrl::MoveToTag(tag, window) => {
@@ -289,16 +310,19 @@ fn handle_ctrl(state: &mut State, msg: Ctrl) {
 fn handle_changes(changes: Changes) {
     let mut args: Vec<String> = vec![];
     args.extend(
-        changes.window_removed.iter().map(|w| format!("dispatch movetoworkspacesilent {},address:0x{}", w.tag + 100, w.addr)).collect::<Vec<String>>()
+        changes.changes.window_removed.iter()
+            .map(|w| format!("dispatch movetoworkspacesilent {},address:0x{}",
+                             w.tag + 100 + (32*changes.active_monitor_index as u8), w.addr)).collect::<Vec<String>>()
     );
     args.extend(
-        changes.window_added.iter().map(|w| format!("dispatch movetoworkspacesilent {},address:0x{}", 1, w.addr)).collect::<Vec<String>>()
+        changes.changes.window_added.iter()
+            .map(|w| format!("dispatch movetoworkspacesilent {},address:0x{}", changes.active_monitor_index + 1, w.addr)).collect::<Vec<String>>()
     );
-    if let Some(focus) = changes.focus {
+    if let Some(focus) = changes.changes.focus {
         args.push(format!("dispatch focuswindow address:0x{}", focus));
     }
 
-    hyprctl(args);
+    hyprctl_batch(args);
 }
 
 #[cfg(test)]
@@ -309,8 +333,15 @@ mod tests {
     fn test_parse_line() {
         let line = "openwindow>>12345,hoge\n";
 
-        let (command, id) = parse_line(line).unwrap();
+        let (command, id, extra) = parse_line(line).unwrap();
         assert_eq!(command, "openwindow");
         assert_eq!(id, "12345");
+
+        let line = "movewindow>>123456,2\n";
+
+        let (command, id, extra) = parse_line(line).unwrap();
+        assert_eq!(command, "movewindow");
+        assert_eq!(id, "123456");
+        assert_eq!(extra, "2");
     }
 }

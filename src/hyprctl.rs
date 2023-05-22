@@ -1,8 +1,21 @@
+use serde::Deserialize;
 use tokio::{net::UnixStream, io::{BufStream, AsyncWriteExt, AsyncBufReadExt}, process::Command};
 
 use crate::hyprland_dir;
 
-pub fn hyprctl(args: Vec<String>) {
+#[derive(Debug, Deserialize)]
+pub struct MonitorInfo {
+    pub id: u8,
+    pub name: String,
+    pub focused: bool,
+}
+
+pub async fn hyprctl_monitors() -> anyhow::Result<Vec<MonitorInfo>> {
+    let out = Command::new("hyprctl").args(vec!["monitors", "-j"]).output().await?;
+    Ok(serde_json::from_slice(&out.stdout)?)
+}
+
+pub fn hyprctl_batch(args: Vec<String>) {
     if args.len() == 0 {
         tracing::debug!("no args");
         return;

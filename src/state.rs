@@ -51,6 +51,13 @@ impl State {
         self.visible_tags
     }
 
+    pub fn active_window(&self) -> Option<String> {
+        match &self.active_window {
+            Some(w) => Some(w.clone()),
+            None => None,
+        }
+    }
+
     pub fn set_visible_tags(&mut self, tags: u32) -> anyhow::Result<Changes> {
         if tags == 0 {
             bail!("at least one tag need to be visible");

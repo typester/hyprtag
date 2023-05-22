@@ -52,7 +52,7 @@ impl MonitorsState {
         if next_index < self.monitors.len() {
             (next_index as u8) + 1
         } else {
-            1
+            0
         }
     }
 
@@ -83,12 +83,14 @@ impl MonitorsState {
         self.monitors[self.active_monitor_index].state.window_removed(window)
     }
 
-    pub fn window_moved(&mut self, window: String, dest_monitor: u8) -> anyhow::Result<()> {
-        let dest_monitor_index = (dest_monitor - 1) as usize;
-        if dest_monitor_index >= 100 {
-            // hide windows
-            return Ok(())
-        }
+    pub fn move_window_to_monitor(&mut self, dest_monitor: u8, window: Option<String>) -> anyhow::Result<()> {
+        let window = window.or_else(|| {
+            self.monitors[self.active_monitor_index].state.active_window()
+        });
+        let window = match window {
+            Some(w) => w,
+            None => bail!("Couldn't detect window"),
+        };
 
         let window_removed = self.monitors.iter_mut().find_map(|m| {
             match m.state.window_removed(window.clone()) {
@@ -98,7 +100,7 @@ impl MonitorsState {
         });
 
         if window_removed.is_some() {
-            self.monitors[dest_monitor_index].state.new_window_added(window)
+            self.monitors[dest_monitor as usize].state.new_window_added(window)
         } else {
             bail!("no such window: {}", window)
         }

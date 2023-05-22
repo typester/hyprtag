@@ -318,6 +318,8 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
                 format!("dispatch movetoworkspace {}", next_monitor),
             ];
             hyprctl_batch(args);
+
+            state.move_window_to_monitor(next_monitor, None);
         },
     }
 }

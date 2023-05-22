@@ -16,7 +16,8 @@ enum Ctrl {
     ShowTag(u8),
     ToggleTag(u8),
     MoveToTag(u8, Option<String>),
-    RestorePrevTags(),
+    RestorePrevTags,
+    MoveToNextMonitor,
 }
 
 #[tokio::main]
@@ -174,8 +175,13 @@ async fn handle_ctrl_socket(tx: mpsc::Sender<Ctrl>, stream: UnixStream) {
                         tx.send(Ctrl::ToggleTag(tag)).await.expect("send error");
                     },
                     "restore" => {
-                        tx.send(Ctrl::RestorePrevTags()).await.expect("send error");
+                        tx.send(Ctrl::RestorePrevTags).await.expect("send error");
                     },
+
+                    "move_to_next_monitor" => {
+                        tx.send(Ctrl::MoveToNextMonitor).await.expect("send error");
+                    },
+
                     _ => {},
                 }
             },
@@ -294,7 +300,7 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
             handle_changes(changes);
         },
 
-        Ctrl::RestorePrevTags() => {
+        Ctrl::RestorePrevTags => {
             let changes = match state.restore_prev_tags() {
                 Ok(changes) => changes,
                 Err(err) => {
@@ -303,6 +309,14 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
                 },
             };
             handle_changes(changes);
+        },
+
+        Ctrl::MoveToNextMonitor => {
+            let next_monitor = state.next_monitor();
+            let args = vec![
+                format!("dispatch movetoworkspace {}", next_monitor),
+            ];
+            hyprctl_batch(args);
         },
     }
 }
@@ -331,11 +345,12 @@ mod tests {
 
     #[test]
     fn test_parse_line() {
-        let line = "openwindow>>12345,hoge\n";
+        let line = "openwindow>>12345\n";
 
         let (command, id, extra) = parse_line(line).unwrap();
         assert_eq!(command, "openwindow");
         assert_eq!(id, "12345");
+        assert_eq!(extra, "");
 
         let line = "movewindow>>123456,2\n";
 

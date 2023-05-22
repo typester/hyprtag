@@ -47,6 +47,15 @@ impl From<Vec<MonitorInfo>> for MonitorsState {
 }
 
 impl MonitorsState {
+    pub fn next_monitor(&self) -> u8 {
+        let next_index = self.active_monitor_index + 1;
+        if next_index < self.monitors.len() {
+            (next_index as u8) + 1
+        } else {
+            1
+        }
+    }
+
     pub fn focused_monitor_changed(&mut self, name: &str) -> anyhow::Result<()> {
         let index = self.monitors.iter().enumerate().find_map(|(i, m)| {
             if m.name == name {

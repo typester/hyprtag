@@ -50,7 +50,7 @@ impl MonitorsState {
     pub fn next_monitor(&self) -> u8 {
         let next_index = self.active_monitor_index + 1;
         if next_index < self.monitors.len() {
-            (next_index as u8) + 1
+            (next_index as u8)
         } else {
             0
         }

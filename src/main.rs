@@ -315,7 +315,7 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
         Ctrl::MoveToNextMonitor => {
             let next_monitor = state.next_monitor();
             let args = vec![
-                format!("dispatch movetoworkspace {}", next_monitor),
+                format!("dispatch movetoworkspace {}", next_monitor + 1),
             ];
             hyprctl_batch(args);
 

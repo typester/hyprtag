@@ -47,6 +47,17 @@ impl State {
         }
     }
 
+    pub fn debug_dump(&self) -> String {
+        let mut s = String::new();
+        for tag in self.tags.iter() {
+            if tag.window_addrs.len() == 0 {
+                continue;
+            }
+            s += format!("{}: {}\n", tag.id, tag.window_addrs.join(",")).as_str();
+        }
+        s
+    }
+
     pub fn visible_tags(&self) -> u32 {
         self.visible_tags
     }
@@ -137,10 +148,8 @@ impl State {
         Ok(())
     }
 
-    pub fn focus_window_changed(&mut self, window: String) -> anyhow::Result<()> {
-        let tag_index = self.find_window_tag_index(&window);
-
-        if tag_index.is_none() {
+    pub fn focus_window_changed(&mut self, window: String, is_new: bool) -> anyhow::Result<()> {
+        if is_new {
             self.new_window_added(window.clone())?;
         }
 
@@ -344,7 +353,7 @@ mod tests {
     fn active_tag_index() {
         let mut state = State::new();
 
-        state.focus_window_changed("terminal".into()).unwrap();
+        state.focus_window_changed("terminal".into(), true).unwrap();
         assert_eq!(state.visible_windows().len(), 1);
         assert!(state.active_window.is_some());
         assert_eq!(state.active_tag_index, 0);

@@ -47,10 +47,19 @@ impl From<Vec<MonitorInfo>> for MonitorsState {
 }
 
 impl MonitorsState {
+    pub fn debug_dump(&self) -> String {
+        let mut s = format!("Active monitor: {}\n", self.active_monitor_index);
+        for monitor in self.monitors.iter() {
+            s += format!("Monitor {},{}:\n", monitor.id, monitor.name).as_str();
+            s += monitor.state.debug_dump().as_str();
+        }
+        s
+    }
+
     pub fn next_monitor(&self) -> u8 {
         let next_index = self.active_monitor_index + 1;
         if next_index < self.monitors.len() {
-            (next_index as u8)
+            next_index as u8
         } else {
             0
         }
@@ -75,7 +84,22 @@ impl MonitorsState {
         }
     }
 
+    pub fn focused_monitor_changed_by_num(&mut self, n: u8) {
+        let index = n - 1;
+        
+    }
+
     pub fn new_window_added(&mut self, window: String) -> anyhow::Result<()> {
+        tracing::debug!(?window, "new_window_added");
+        for (i, monitor) in self.monitors.iter().enumerate() {
+            if i == self.active_monitor_index {
+                continue;
+            }
+
+            if let Some(_) = monitor.state.find_window_tag_index(&window) {
+                bail!("window:{} is already in other tag", window);
+            }
+        }
         self.monitors[self.active_monitor_index].state.new_window_added(window)
     }
 
@@ -92,6 +116,8 @@ impl MonitorsState {
             None => bail!("Couldn't detect window"),
         };
 
+        tracing::debug!(%window, %dest_monitor, "move_window_to_monitor");
+
         let window_removed = self.monitors.iter_mut().find_map(|m| {
             match m.state.window_removed(window.clone()) {
                 Ok(_) => Some(true),
@@ -107,7 +133,11 @@ impl MonitorsState {
     }
 
     pub fn focus_window_changed(&mut self, window: String) -> anyhow::Result<()> {
-        self.monitors[self.active_monitor_index].state.focus_window_changed(window)
+        let new_window = self.monitors.iter().find(|m| {
+            m.state.find_window_tag_index(&window).is_some()
+        }).is_none();
+
+        self.monitors[self.active_monitor_index].state.focus_window_changed(window, new_window)
     }
 
     pub fn move_window(&mut self, dest_tag: u8, window: Option<String>) -> anyhow::Result<Changes> {

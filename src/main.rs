@@ -226,9 +226,11 @@ fn handle_event_stream(state: &mut MonitorsState, buf: &str) {
             match cmd {
                 "focusedmon" => {
                     tracing::debug!("focusedmon");
+                    tracing::debug!("before {}", state.debug_dump());
                     if let Err(err) = state.focused_monitor_changed(id) {
                         tracing::error!(%err, "focusedmon error")
                     }
+                    tracing::debug!("after {}", state.debug_dump());
                 },
 
                 "openwindow" => {
@@ -287,6 +289,7 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
                     return;
                 },
             };
+            tracing::debug!(?changes, "showTag changes");
             handle_changes(changes);
         },
 
@@ -319,7 +322,13 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
             ];
             hyprctl_batch(args);
 
+            tracing::info!(?next_monitor, "move to next monitor");
+            tracing::info!("{}", state.debug_dump());
+
             state.move_window_to_monitor(next_monitor, None);
+
+            tracing::info!("after state:");
+            tracing::info!("{}", state.debug_dump());
         },
     }
 }

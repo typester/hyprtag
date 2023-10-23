@@ -5,7 +5,7 @@ use hyprctl::{hyprctl_batch, hyprctl_monitors};
 use tokio::{net::{UnixStream, UnixListener}, io::{BufStream, AsyncBufReadExt}, sync::mpsc};
 use tracing_subscriber::EnvFilter;
 
-use monitor::{MonitorsState, Changes};
+use monitor::{MonitorsState, Changes, Monitor};
 
 pub mod monitor;
 pub mod state;
@@ -18,6 +18,7 @@ enum Ctrl {
     MoveToTag(u8, Option<String>),
     RestorePrevTags,
     MoveToNextMonitor,
+    MonitorAdded(Monitor),
 }
 
 #[tokio::main]
@@ -39,8 +40,9 @@ async fn main() -> anyhow::Result<()> {
     let ctrl_sock = UnixListener::bind(&ctrl_sock)?;
 
     let (tx, mut rx) = mpsc::channel(10);
+    let tx_inner = tx.clone();
     tokio::spawn(async move {
-        ctrl_listener(tx, ctrl_sock).await
+        ctrl_listener(tx_inner, ctrl_sock).await
     });
 
     loop {
@@ -54,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
                         if r == 0 {
                             break;
                         }
-                        handle_event_stream(&mut monitors, &buf);
+                        handle_event_stream(&mut monitors, &buf, tx.clone());
                     },
                 }
             }
@@ -212,7 +214,7 @@ fn parse_line<'a>(line: &'a str) -> anyhow::Result<(&'a str, &'a str, &'a str)> 
     }
 }
 
-fn handle_event_stream(state: &mut MonitorsState, buf: &str) {
+fn handle_event_stream(state: &mut MonitorsState, buf: &str, tx: mpsc::Sender<Ctrl>) {
     tracing::debug!("[event] {:?}", buf);
 
     match parse_line(&buf) {
@@ -225,12 +227,9 @@ fn handle_event_stream(state: &mut MonitorsState, buf: &str) {
             }
             match cmd {
                 "focusedmon" => {
-                    tracing::debug!("focusedmon");
-                    tracing::debug!("before {}", state.debug_dump());
                     if let Err(err) = state.focused_monitor_changed(id) {
                         tracing::error!(%err, "focusedmon error")
                     }
-                    tracing::debug!("after {}", state.debug_dump());
                 },
 
                 "openwindow" => {
@@ -249,6 +248,18 @@ fn handle_event_stream(state: &mut MonitorsState, buf: &str) {
                 "activewindowv2" => {
                     if let Err(err) = state.focus_window_changed(id.into()) {
                         tracing::error!(%err, "activewindowv2 error");
+                    }
+                },
+
+                "monitoradded" => {
+                    if let Err(err) = state.monitor_added(id, tx) {
+                        tracing::error!(%err, "monitoradded error");
+                    }
+                },
+
+                "monitorremoved" => {
+                    if let Err(err) = state.monitor_removed(id) {
+                        tracing::error!(%err, "monitorremoved error");
                     }
                 },
 
@@ -322,13 +333,16 @@ fn handle_ctrl(state: &mut MonitorsState, msg: Ctrl) {
             ];
             hyprctl_batch(args);
 
-            tracing::info!(?next_monitor, "move to next monitor");
-            tracing::info!("{}", state.debug_dump());
+            if let Err(err) = state.move_window_to_monitor(next_monitor, None) {
+                tracing::error!(%err, "failed to move window to next monitor");
+            }
+        },
 
-            state.move_window_to_monitor(next_monitor, None);
-
-            tracing::info!("after state:");
-            tracing::info!("{}", state.debug_dump());
+        Ctrl::MonitorAdded(monitor) => {
+            tracing::info!("handle new monitor: {}", monitor.name);
+            if let Err(err) = state.monitor_added_with_object(monitor) {
+                tracing::error!(%err, "failed to add monitor");
+            }
         },
     }
 }

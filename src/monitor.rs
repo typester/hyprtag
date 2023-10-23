@@ -1,11 +1,13 @@
 use anyhow::bail;
+use tokio::{runtime::Handle, sync::mpsc};
+use tracing::instrument::WithSubscriber;
 
-use crate::{state::{State, Changes as MonitorChanges}, hyprctl::MonitorInfo};
+use crate::{state::{State, Changes as MonitorChanges}, hyprctl::{MonitorInfo, hyprctl_monitors}, Ctrl};
 
-#[derive(Debug)]
-struct Monitor {
-    id: u8,
-    name: String,
+#[derive(Debug, Clone)]
+pub struct Monitor {
+    pub id: u8,
+    pub name: String,
     state: State,
 }
 
@@ -86,7 +88,7 @@ impl MonitorsState {
 
     pub fn focused_monitor_changed_by_num(&mut self, n: u8) {
         let index = n - 1;
-        
+        unimplemented!()
     }
 
     pub fn new_window_added(&mut self, window: String) -> anyhow::Result<()> {
@@ -170,5 +172,73 @@ impl MonitorsState {
             active_monitor_index: self.active_monitor_index,
             changes,
         })
+    }
+
+    pub fn monitor_removed(&mut self, name: &str) -> anyhow::Result<()> {
+        let (index, monitor) = match self.monitors.iter().enumerate().find(|(_, m)| m.name == name) {
+            Some(m) => m,
+            None => bail!("No such monitor: {}", name),
+        }.clone();
+
+        let first_monitor = match self.monitors.iter().find(|m| m.name != name) {
+            Some(m) => m,
+            None => bail!("All monitors were removed?"), // TODO: care this case
+        }.clone();
+
+        let windows = monitor.state.all_window_addrs();
+        for w in windows.iter() {
+            self.move_window_to_monitor(first_monitor.id, Some(w.clone()))?;
+        }
+
+        self.monitors.remove(index);
+
+        Ok(())
+    }
+
+    pub(crate) fn monitor_added(&mut self, name: &str, tx: mpsc::Sender<Ctrl>) -> anyhow::Result<()> {
+        if let Some(_) = self.monitors.iter().find(|m| m.name == name) {
+            bail!("monitor:{} is already registered", name);
+        }
+
+        let name = name.to_string();
+        tokio::spawn(async move {
+            let monitors = match hyprctl_monitors().await {
+                Ok(m) => m,
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch monitor info");
+                    return
+                },
+            };
+
+            let info = match monitors.iter().find(|m| m.name == name) {
+                Some(info) => info,
+                None => {
+                    tracing::error!("no such window: name={}", name);
+                    return
+                },
+            };
+
+            let monitor = Monitor {
+                id: info.id.into(),
+                name: info.name.to_string(),
+                state: State::new(),
+            };
+
+            if let Err(err) = tx.send(Ctrl::MonitorAdded(monitor)).await {
+                tracing::error!(%err, "failed to send Ctrl::MonitorAdded");
+            }
+        });
+
+        Ok(())
+    }
+
+    pub(crate) fn monitor_added_with_object(&mut self, monitor: Monitor) -> anyhow::Result<()> {
+        if let Some(_) = self.monitors.iter().find(|m| m.name == monitor.name) {
+            bail!("monitor:{} is already registered", monitor.name);
+        }
+
+        self.monitors.push(monitor);
+
+        Ok(())
     }
 }

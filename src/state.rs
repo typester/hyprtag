@@ -2,7 +2,7 @@ use std::{collections::HashSet, hash::Hash};
 
 use anyhow::bail;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct State {
     tags: Vec<Tag>,
     visible_tags: u32,
@@ -241,9 +241,13 @@ impl State {
             }
         })
     }
+
+    pub fn all_window_addrs(&self) -> Vec<String> {
+        self.tags.iter().flat_map(|t| t.window_addrs.clone()).collect()
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Tag {
     id: u8,
     window_addrs: Vec<String>,

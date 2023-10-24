@@ -2,7 +2,7 @@ use anyhow::bail;
 use tokio::{runtime::Handle, sync::mpsc};
 use tracing::instrument::WithSubscriber;
 
-use crate::{state::{State, Changes as MonitorChanges}, hyprctl::{MonitorInfo, hyprctl_monitors}, Ctrl};
+use crate::{state::{State, Changes as MonitorChanges}, hyprctl::{MonitorInfo, hyprctl_monitors, hyprctl_batch}, Ctrl};
 
 #[derive(Debug, Clone)]
 pub struct Monitor {
@@ -174,25 +174,26 @@ impl MonitorsState {
         })
     }
 
-    pub fn monitor_removed(&mut self, name: &str) -> anyhow::Result<()> {
-        let (index, monitor) = match self.monitors.iter().enumerate().find(|(_, m)| m.name == name) {
+    pub fn monitor_removed(&mut self, name: &str) -> anyhow::Result<(usize, usize, Vec<String>)> {
+        let (removed_index, monitor) = match self.monitors.iter().enumerate().find(|(_, m)| m.name == name) {
             Some(m) => m,
             None => bail!("No such monitor: {}", name),
-        }.clone();
+        };
 
-        let first_monitor = match self.monitors.iter().find(|m| m.name != name) {
+        let (index, first_monitor) = match self.monitors.iter().enumerate().find(|(_, m)| m.name != name) {
             Some(m) => m,
             None => bail!("All monitors were removed?"), // TODO: care this case
-        }.clone();
+        };
+        let first_monitor = first_monitor.clone();
 
         let windows = monitor.state.all_window_addrs();
         for w in windows.iter() {
             self.move_window_to_monitor(first_monitor.id, Some(w.clone()))?;
         }
 
-        self.monitors.remove(index);
+        self.monitors.remove(removed_index);
 
-        Ok(())
+        Ok((index, first_monitor.state.active_tag_index(), windows))
     }
 
     pub(crate) fn monitor_added(&mut self, name: &str, tx: mpsc::Sender<Ctrl>) -> anyhow::Result<()> {
@@ -239,6 +240,15 @@ impl MonitorsState {
 
         self.monitors.push(monitor);
 
+        self.reset_monitor_workspaces();
+
         Ok(())
+    }
+
+    fn reset_monitor_workspaces(&self) {
+        let args = self.monitors.iter().map(|m| {
+            format!(r#"dispatch moveworkspacetomonitor {} {}"#, m.id + 1, m.name)
+        }).collect();
+        hyprctl_batch(args);
     }
 }

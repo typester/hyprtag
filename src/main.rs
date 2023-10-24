@@ -6,6 +6,9 @@ use tokio::{net::{UnixStream, UnixListener}, io::{BufStream, AsyncBufReadExt}, s
 use tracing_subscriber::EnvFilter;
 
 use monitor::{MonitorsState, Changes, Monitor};
+use state::{Changes as MonitorChanges};
+
+use crate::state::WindowInfo;
 
 pub mod monitor;
 pub mod state;
@@ -258,9 +261,26 @@ fn handle_event_stream(state: &mut MonitorsState, buf: &str, tx: mpsc::Sender<Ct
                 },
 
                 "monitorremoved" => {
-                    if let Err(err) = state.monitor_removed(id) {
-                        tracing::error!(%err, "monitorremoved error");
-                    }
+                    let (active_monitor_index, active_tag_index, removed_windows) = match state.monitor_removed(id) {
+                        Ok(w) => w,
+                        Err(err) => {
+                            tracing::error!(%err, "monitorremoved error");
+                            return;
+                        },
+                    };
+
+                    let changes = Changes {
+                        active_monitor_index,
+                        changes: MonitorChanges {
+                            window_added: removed_windows.iter().map(|w| WindowInfo {
+                                addr: w.into(),
+                                tag: active_tag_index as u8 + 1,
+                            }).collect(),
+                            window_removed: vec![],
+                            focus: None,
+                        },
+                    };
+                    handle_changes(changes);
                 },
 
                 //// disable manual window move. this breaks tag toggle feature

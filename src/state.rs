@@ -69,6 +69,10 @@ impl State {
         }
     }
 
+    pub fn active_tag_index(&self) -> usize {
+        self.active_tag_index
+    }
+
     pub fn set_visible_tags(&mut self, tags: u32) -> anyhow::Result<Changes> {
         if tags == 0 {
             bail!("at least one tag need to be visible");
